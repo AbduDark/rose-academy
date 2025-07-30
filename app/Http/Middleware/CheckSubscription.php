@@ -5,24 +5,26 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use App\Models\Subscription;
-use Carbon\Carbon;
-
+use Symfony\Component\HttpFoundation\Response;
 
 class CheckSubscription
 {
-    public function handle(Request $request, Closure $next)
+    public function handle(Request $request, Closure $next): Response
     {
-        $user = $request->user();
-        $courseId = $request->route('course_id') ?? $request->course_id;
+        $user = auth()->user();
+        $courseId = $request->route('course') ?? $request->course_id;
 
-        $subscription = Subscription::where('user_id', $user->id)
+        if (!$courseId) {
+            return response()->json(['message' => 'Course ID is required'], 400);
+        }
+
+        $hasSubscription = Subscription::where('user_id', $user->id)
             ->where('course_id', $courseId)
             ->where('status', 'active')
-            ->whereDate('end_date', '>=', Carbon::now())
-            ->first();
+            ->exists();
 
-        if (!$subscription) {
-            return response()->json(['message' => 'You are not subscribed to this course.'], 403);
+        if (!$hasSubscription) {
+            return response()->json(['message' => 'You must subscribe to this course first'], 403);
         }
 
         return $next($request);

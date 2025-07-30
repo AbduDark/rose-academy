@@ -2,53 +2,90 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 use App\Models\Course;
-use App\Models\Subscription;
+use App\Models\Lesson;
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
-    public function run()
+    public function run(): void
     {
-        // Create an admin user
-        User::updateOrCreate([
-            'email' => 'admin@roseacademy.com'
-        ], [
-            'name' => 'Super Admin',
-            'password' => Hash::make('password123'),
+        // Create Admin User
+        User::create([
+            'name' => 'Admin User',
+            'email' => 'admin@example.com',
+            'password' => Hash::make('password'),
+            'phone' => '01234567890',
             'gender' => 'male',
             'role' => 'admin',
-            'is_admin' => true,
+            'email_verified_at' => now(),
         ]);
 
-        // Create some student users
-        User::factory()->count(5)->create();
+        // Create Regular User
+        $user = User::create([
+            'name' => 'طالب تجريبي',
+            'email' => 'student@example.com',
+            'password' => Hash::make('password'),
+            'phone' => '01987654321',
+            'gender' => 'male',
+            'role' => 'user',
+            'email_verified_at' => now(),
+        ]);
 
-        // Create some courses
-        $courses = [
-            ['title' => 'Chemistry 101', 'description' => 'Introductory Chemistry', 'price' => 100.00],
-            ['title' => 'Physics Basics', 'description' => 'Fundamentals of Physics', 'price' => 120.00],
-            ['title' => 'Mathematics Advanced', 'description' => 'Advanced Math Course', 'price' => 150.00],
-        ];
+        // Create Sample Courses
+        $course1 = Course::create([
+            'title' => 'دورة البرمجة الأساسية',
+            'description' => 'تعلم أساسيات البرمجة من الصفر',
+            'price' => 99.99,
+            'duration_hours' => 20,
+            'level' => 'beginner',
+            'language' => 'ar',
+            'is_active' => true,
+            'instructor_name' => 'أحمد محمد',
+        ]);
 
-        foreach ($courses as $data) {
-            Course::updateOrCreate(
-                ['title' => $data['title']],
-                ['description' => $data['description'], 'price' => $data['price']]
-            );
-        }
+        $course2 = Course::create([
+            'title' => 'دورة تطوير المواقع',
+            'description' => 'تعلم تطوير المواقع باستخدام HTML, CSS, JavaScript',
+            'price' => 149.99,
+            'duration_hours' => 35,
+            'level' => 'intermediate',
+            'language' => 'ar',
+            'is_active' => true,
+            'instructor_name' => 'فاطمة أحمد',
+        ]);
 
-        // Subscribe first student to first course
-        $student = User::where('role', 'student')->first();
-        $firstCourse = Course::first();
+        // Create Sample Lessons
+        Lesson::create([
+            'course_id' => $course1->id,
+            'title' => 'مقدمة في البرمجة',
+            'description' => 'فهم أساسيات البرمجة ولغات البرمجة',
+            'video_url' => 'https://example.com/video1.mp4',
+            'duration_minutes' => 30,
+            'order' => 1,
+            'is_free' => true,
+        ]);
 
-        if ($student && $firstCourse) {
-            Subscription::updateOrCreate(
-                ['user_id' => $student->id, 'course_id' => $firstCourse->id],
-                ['start_date' => now(), 'end_date' => now()->addMonth(), 'status' => 'active']
-            );
-        }
+        Lesson::create([
+            'course_id' => $course1->id,
+            'title' => 'المتغيرات والثوابت',
+            'description' => 'تعلم كيفية استخدام المتغيرات في البرمجة',
+            'video_url' => 'https://example.com/video2.mp4',
+            'duration_minutes' => 45,
+            'order' => 2,
+            'is_free' => false,
+        ]);
+
+        Lesson::create([
+            'course_id' => $course2->id,
+            'title' => 'مقدمة في HTML',
+            'description' => 'تعلم أساسيات لغة HTML',
+            'video_url' => 'https://example.com/video3.mp4',
+            'duration_minutes' => 40,
+            'order' => 1,
+            'is_free' => true,
+        ]);
     }
 }

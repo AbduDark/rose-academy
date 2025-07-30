@@ -1,3 +1,4 @@
+
 <?php
 
 use Illuminate\Database\Migrations\Migration;
@@ -8,19 +9,18 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('email_verifications', function (Blueprint $table) {
+        Schema::create('favorites', function (Blueprint $table) {
             $table->id();
-            $table->string('email');
-            $table->string('pin');
-            $table->timestamp('expires_at');
+            $table->foreignId('user_id')->constrained()->onDelete('cascade');
+            $table->foreignId('course_id')->constrained()->onDelete('cascade');
             $table->timestamps();
-
-            $table->index('email');
+            
+            $table->unique(['user_id', 'course_id']);
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('email_verifications');
+        Schema::dropIfExists('favorites');
     }
 };

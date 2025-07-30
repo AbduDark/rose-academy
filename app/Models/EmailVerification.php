@@ -2,13 +2,18 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class EmailVerification extends Model
 {
-    protected $fillable = ['email', 'pin', 'expires_at'];
+    use HasFactory;
 
-    public $timestamps = true;
+    protected $fillable = [
+        'email',
+        'pin',
+        'expires_at',
+    ];
 
     protected $casts = [
         'expires_at' => 'datetime',

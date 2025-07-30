@@ -1,3 +1,4 @@
+
 <?php
 
 namespace App\Http\Controllers\Api;
@@ -11,38 +12,79 @@ use Illuminate\Support\Facades\Log;
 use App\Models\EmailVerification;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\SendPinMail;
-
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
     public function register(Request $request)
     {
+        $key = 'register:' . $request->ip();
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            return response()->json([
+                'message' => __('messages.general.error'),
+                'error' => 'Too many registration attempts. Try again later.'
+            ], 429);
+        }
+
         $validator = Validator::make($request->all(), [
             'name'     => 'required|string|max:255',
             'email'    => 'required|string|email|unique:users',
-            'password' => 'required|string|min:6|confirmed',
+            'password' => 'required|string|min:8|confirmed|regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/',
             'gender'   => 'required|in:male,female',
+        ], [
+            'password.regex' => 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character.'
         ]);
 
         if ($validator->fails()) {
+            RateLimiter::hit($key, 300);
             return response()->json(['errors' => $validator->errors()], 422);
         }
+
+        $deviceFingerprint = $this->generateDeviceFingerprint($request);
 
         $user = User::create([
             'name'     => $request->name,
             'email'    => $request->email,
             'password' => Hash::make($request->password),
             'gender'   => $request->gender,
+            'device_fingerprint' => $deviceFingerprint,
         ]);
 
+        $token = $user->createToken('auth_token')->plainTextToken;
+        $sessionId = Str::random(40);
+        
+        $user->update([
+            'active_session_id' => $sessionId,
+            'last_login_at' => now(),
+        ]);
+
+        Log::channel('security')->info('User registered', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'ip' => $request->ip(),
+        ]);
+
+        RateLimiter::clear($key);
+
         return response()->json([
-            'message' => 'User registered successfully',
-            'token'   => $user->createToken('auth_token')->plainTextToken
+            'message' => __('messages.auth.registered_successfully'),
+            'token'   => $token,
+            'session_id' => $sessionId
         ], 201);
     }
 
     public function login(Request $request)
     {
+        $key = 'login:' . $request->ip();
+        if (RateLimiter::tooManyAttempts($key, 10)) {
+            $seconds = RateLimiter::availableIn($key);
+            return response()->json([
+                'message' => __('messages.general.error'),
+                'error' => 'Too many login attempts. Try again in ' . $seconds . ' seconds.'
+            ], 429);
+        }
+
         $request->validate([
             'email'    => 'required|email',
             'password' => 'required',
@@ -50,13 +92,64 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (! Hash::check($request->password, (string) $user->password)) {
-            return response()->json(['message' => 'Invalid credentials'], 401);
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            RateLimiter::hit($key, 900);
+            
+            Log::channel('security')->warning('Failed login attempt', [
+                'email' => $request->email,
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]);
+
+            return response()->json(['message' => __('messages.auth.invalid_credentials')], 401);
         }
 
+        // Check if user is already logged in on another device
+        $deviceFingerprint = $this->generateDeviceFingerprint($request);
+        
+        if ($user->active_session_id && $user->device_fingerprint !== $deviceFingerprint) {
+            // Revoke all existing tokens
+            $user->tokens()->delete();
+            
+            Log::channel('security')->warning('Multiple device login attempt', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'ip' => $request->ip(),
+            ]);
+
+            return response()->json([
+                'message' => __('messages.auth.already_logged_in_another_device'),
+                'error' => 'You are already logged in on another device. Please logout from that device first.'
+            ], 403);
+        }
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+        $sessionId = Str::random(40);
+        
+        $user->update([
+            'active_session_id' => $sessionId,
+            'device_fingerprint' => $deviceFingerprint,
+            'last_login_at' => now(),
+        ]);
+
+        Log::channel('security')->info('User logged in', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'ip' => $request->ip(),
+        ]);
+
+        RateLimiter::clear($key);
+
         return response()->json([
-            'token' => $user->createToken('auth_token')->plainTextToken,
-            'messeage' => 'Login Done'
+            'token' => $token,
+            'session_id' => $sessionId,
+            'message' => __('messages.auth.login_done'),
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role ?? 'student',
+            ]
         ]);
     }
 
@@ -67,27 +160,83 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
-        return response()->json(['message' => 'Logged out successfully']);
+        $user = $request->user();
+        
+        Log::channel('security')->info('User logged out', [
+            'user_id' => $user->id,
+            'ip' => $request->ip(),
+        ]);
+
+        $user->update([
+            'active_session_id' => null,
+            'device_fingerprint' => null,
+        ]);
+
+        $user->currentAccessToken()->delete();
+        
+        return response()->json(['message' => __('messages.auth.logged_out_successfully')]);
+    }
+
+    public function forceLogout(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            return response()->json(['message' => __('messages.auth.invalid_credentials')], 401);
+        }
+
+        // Force logout from all devices
+        $user->tokens()->delete();
+        $user->update([
+            'active_session_id' => null,
+            'device_fingerprint' => null,
+        ]);
+
+        Log::channel('security')->info('Force logout performed', [
+            'user_id' => $user->id,
+            'ip' => $request->ip(),
+        ]);
+
+        return response()->json(['message' => 'Successfully logged out from all devices']);
     }
 
     public function changePassword(Request $request)
     {
         $request->validate([
             'current_password' => 'required',
-            'new_password'     => 'required|min:6|confirmed'
+            'new_password'     => 'required|min:8|confirmed|regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/'
+        ], [
+            'new_password.regex' => 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character.'
         ]);
 
         $user = $request->user();
 
-        if (! Hash::check($request->current_password, $user->password)) {
-            return response()->json(['message' => 'Current password incorrect'], 422);
+        if (!Hash::check($request->current_password, $user->password)) {
+            Log::channel('security')->warning('Failed password change attempt', [
+                'user_id' => $user->id,
+                'ip' => $request->ip(),
+            ]);
+
+            return response()->json(['message' => __('messages.auth.current_password_incorrect')], 422);
         }
 
         $user->password = Hash::make($request->new_password);
         $user->save();
 
-        return response()->json(['message' => 'Password changed successfully']);
+        // Force logout from all other sessions
+        $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+
+        Log::channel('security')->info('Password changed', [
+            'user_id' => $user->id,
+            'ip' => $request->ip(),
+        ]);
+
+        return response()->json(['message' => __('messages.auth.password_changed_successfully')]);
     }
 
     public function updateProfile(Request $request)
@@ -110,7 +259,7 @@ class AuthController extends Controller
 
         $user->save();
 
-        return response()->json(['message' => 'Profile updated successfully', 'user' => $user]);
+        return response()->json(['message' => __('messages.auth.profile_updated_successfully'), 'user' => $user]);
     }
 
     public function forgotPassword(Request $request)
@@ -124,11 +273,14 @@ class AuthController extends Controller
             ['pin' => $pin, 'expires_at' => now()->addMinutes(15)]
         );
 
-        // TODO: Send the pin via email
         Mail::to($request->email)->send(new SendPinMail($pin));
 
+        Log::channel('security')->info('Password reset requested', [
+            'email' => $request->email,
+            'ip' => $request->ip(),
+        ]);
 
-        return response()->json(['message' => 'Verification PIN sent to email']);
+        return response()->json(['message' => __('messages.auth.verification_pin_sent')]);
     }
 
     public function verifyEmail(Request $request)
@@ -143,8 +295,8 @@ class AuthController extends Controller
             ->where('expires_at', '>', now())
             ->first();
 
-        if (! $verification) {
-            return response()->json(['message' => 'Invalid or expired PIN'], 422);
+        if (!$verification) {
+            return response()->json(['message' => __('messages.auth.invalid_or_expired_pin')], 422);
         }
 
         $user = User::where('email', $request->email)->first();
@@ -153,7 +305,12 @@ class AuthController extends Controller
 
         $verification->delete();
 
-        return response()->json(['message' => 'Email verified successfully']);
+        Log::channel('security')->info('Email verified', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+        ]);
+
+        return response()->json(['message' => __('messages.auth.email_verified_successfully')]);
     }
 
     public function resetPassword(Request $request)
@@ -161,7 +318,9 @@ class AuthController extends Controller
         $request->validate([
             'email'    => 'required|email|exists:users,email',
             'pin'      => 'required|string',
-            'password' => 'required|min:6|confirmed'
+            'password' => 'required|min:8|confirmed|regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/'
+        ], [
+            'password.regex' => 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character.'
         ]);
 
         $verification = EmailVerification::where('email', $request->email)
@@ -169,16 +328,39 @@ class AuthController extends Controller
             ->where('expires_at', '>', now())
             ->first();
 
-        if (! $verification) {
-            return response()->json(['message' => 'Invalid or expired PIN'], 422);
+        if (!$verification) {
+            return response()->json(['message' => __('messages.auth.invalid_or_expired_pin')], 422);
         }
 
         $user = User::where('email', $request->email)->first();
         $user->password = Hash::make($request->password);
+        
+        // Force logout from all devices
+        $user->tokens()->delete();
+        $user->active_session_id = null;
+        $user->device_fingerprint = null;
         $user->save();
 
         $verification->delete();
 
-        return response()->json(['message' => 'Password reset successfully']);
+        Log::channel('security')->info('Password reset completed', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'ip' => $request->ip(),
+        ]);
+
+        return response()->json(['message' => __('messages.auth.password_reset_successfully')]);
+    }
+
+    private function generateDeviceFingerprint(Request $request)
+    {
+        $data = [
+            'user_agent' => $request->userAgent(),
+            'ip' => $request->ip(),
+            'accept_language' => $request->header('Accept-Language'),
+            'accept_encoding' => $request->header('Accept-Encoding'),
+        ];
+
+        return hash('sha256', json_encode($data));
     }
 }

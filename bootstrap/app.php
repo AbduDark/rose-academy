@@ -1,3 +1,4 @@
+
 <?php
 
 use Illuminate\Foundation\Application;
@@ -11,15 +12,21 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
-    ->withMiddleware(function (Middleware $m): void {
-        // Register middleware aliases in Laravel 11
-        $m->alias([
-            'admin'                => \App\Http\Middleware\AdminMiddleware::class,
-            'role'                 => \App\Http\Middleware\RoleMiddleware::class,
-            'check.subscription'   => \App\Http\Middleware\CheckSubscription::class,
-            'gender.content'       => \App\Http\Middleware\GenderContentMiddleware::class,
+    ->withMiddleware(function (Middleware $middleware) {
+        $middleware->api(prepend: [
+            \App\Http\Middleware\LocalizationMiddleware::class,
+            \App\Http\Middleware\SecurityLogMiddleware::class,
+        ]);
+        
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\AdminMiddleware::class,
+            'role' => \App\Http\Middleware\RoleMiddleware::class,
+            'check.subscription' => \App\Http\Middleware\CheckSubscription::class,
+            'gender.content' => \App\Http\Middleware\GenderContentMiddleware::class,
+            'check.session' => \App\Http\Middleware\CheckSessionMiddleware::class,
+            'rate.limit' => \App\Http\Middleware\RateLimitMiddleware::class,
         ]);
     })
-    ->withExceptions(function (Exceptions $exceptions): void {
-        // Exception handling configuration
+    ->withExceptions(function (Exceptions $exceptions) {
+        //
     })->create();

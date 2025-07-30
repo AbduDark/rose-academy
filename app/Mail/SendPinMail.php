@@ -4,22 +4,30 @@ namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Content;
+use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
 class SendPinMail extends Mailable
 {
     use Queueable, SerializesModels;
 
-    public $pin;
+    public function __construct(
+        public string $pin // ✅ Laravel 11 يدعم property promotion مباشرة
+    ) {}
 
-    public function __construct($pin)
+    public function envelope(): Envelope
     {
-        $this->pin = $pin;
+        return new Envelope(
+            subject: 'رمز التحقق - Verification PIN',
+        );
     }
 
-    public function build()
+    public function content(): Content
     {
-        return $this->subject('Your Verification PIN')
-                    ->view('emails.pin');
+        return new Content(
+            view: 'emails.pin',
+            with: ['pin' => $this->pin],
+        );
     }
 }
